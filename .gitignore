@@ -1,0 +1,16 @@
+/lifepp/Debug/
+/lifepp/Release/
+/lifepp/x64/
+/lifepp/*.dll
+/obj/
+*.opensdf
+*.sdf
+*.suo
+*.vcxproj.user
+*.VC.opendb
+/life
+/*.dll
+.DS_Store
+/lifepp/Assets
+/lifepp/logs
+/Build/
