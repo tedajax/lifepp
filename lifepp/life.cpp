@@ -2,41 +2,58 @@
 #include "random.h"
 #include <cstdio>
 #include <ctime>
-#include <unordered_set>
+#include <vector>
+#include <algorithm>
+#include <thread>
+#include <mutex>
 
 struct World
 {
     int width, height;
-    std::unordered_set<int> cells;
+    std::vector<int> cells;
+    std::mutex rwlock;
 
     World(int width, int height)
     {
         this->width = width;
         this->height = height;
+        cells.resize(width * height, 0);
     }
 
-    inline static int hash_cell(int row, int col)
+    inline int get_cell_index(int row, int col)
     {
-        int hash = 23;
-        hash = hash * 31 + row;
-        hash = hash * 31 + col;
-        return hash;
+        return row * width + col;
     }
 
     bool has(int row, int col)
     {
-        int hash = hash_cell(row, col);
-        return cells.find(hash) != cells.end();
+        int index = get_cell_index(row, col);
+        if (index < 0 || index >= (width * height)) {
+            return false;
+        }
+        return cells[index] != 0;
     }
 
     void add(int row, int col)
     {
-        cells.insert(hash_cell(row, col));
+        std::lock_guard<std::mutex> guard(rwlock);
+
+        int index = get_cell_index(row, col);
+        if (index < 0 || index >= width * height) {
+            return;
+        }
+        cells[index] = 1;
     }
 
     void remove(int row, int col)
     {
-        cells.erase(hash_cell(row, col));
+        std::lock_guard<std::mutex> guard(rwlock);
+
+        int index = get_cell_index(row, col);
+        if (index < 0 || index >= width * height) {
+            return;
+        }
+        cells[index] = 0;
     }
 
     int neighbor_count(int row, int col)
@@ -53,27 +70,53 @@ struct World
         return count;
     }
 
-    void step()
+    static void step_worker(World* world, World* old, int start, int end)
     {
-        World old = *this;
-        for (int row = 0; row < height; ++row) {
-            for (int col = 0; col < width; ++col) {
-                bool dead = old.has(row, col);
-                int ncount = old.neighbor_count(row, col);
-                if (dead) {
-                    if (ncount == 3) {
-                        add(row, col);
-                    }
+        for (int i = start; i < end; ++i) {
+            int row = i / world->width;
+            int col = i % world->width;
+            bool dead = !old->has(row, col);
+            int ncount = old->neighbor_count(row, col);
+            if (dead) {
+                if (ncount == 3) {
+                    world->add(row, col);
                 }
-                else {
-                    if (ncount < 2 || ncount > 3) {
-                        remove(row, col);
-                    }
+            }
+            else {
+                if (ncount < 2 || ncount > 3) {
+                    world->remove(row, col);
                 }
             }
         }
     }
+
+    void step()
+    {
+        World old(width, height);
+        old.cells = cells;
+
+        int size = width * height;
+        int workerCount = 10;
+        int cellsPerWorker = size / workerCount;
+        std::vector<std::thread> threads;
+
+        for (int i = 0; i < workerCount; ++i) {
+            int start = i * cellsPerWorker;
+            int end = (i + 1) * cellsPerWorker;
+            if (i == workerCount - 1) { end = size; }
+            threads.push_back(std::thread(step_worker, this, &old, start, end));
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
 };
+
+static void world_step_worker(World* world)
+{
+    world->step();
+}
 
 struct RenderConfig
 {
@@ -89,9 +132,9 @@ int main(int argc, char* argv[])
 
     const int SCREEN_WIDTH = 1280;
     const int SCREEN_HEIGHT = 720;
-    const int CELL_WIDTH = 16;
-    const int CELL_HEIGHT = 16;
-    const int CELL_COUNT = 100;
+    const int CELL_WIDTH = 4;
+    const int CELL_HEIGHT = 4;
+    const int CELL_COUNT = 10000;
 
     SDL_Window* window = SDL_CreateWindow("life", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -105,7 +148,7 @@ int main(int argc, char* argv[])
         int64_t index = random.get(worldWidth * worldHeight);
 
         int r = (int)index / worldWidth;
-        int c = (int)index % worldHeight;
+        int c = (int)index % worldWidth;
 
         world.add(r, c);
     }
@@ -157,7 +200,6 @@ int main(int argc, char* argv[])
         }
 
         if (shouldStep) {
-            printf("stepping ");
             world.step();
         }
 
